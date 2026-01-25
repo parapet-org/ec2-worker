@@ -1,9 +1,29 @@
-import { SQSClient, ReceiveMessageCommand, DeleteMessageCommand } from "@aws-sdk/client-sqs";
+import { SQSClient, ReceiveMessageCommand, DeleteMessageCommand, SendMessageCommand, GetQueueUrlCommand } from "@aws-sdk/client-sqs";
 
 // Configuration
 const QUEUE_URL = process.env.SQS_QUEUE_URL || "";
+const RESPONSE_QUEUE_NAME = process.env.RESPONSE_QUEUE_NAME || "";
 const AWS_REGION = process.env.AWS_REGION || "us-east-1";
 const POLL_INTERVAL = 5000; // 5 seconds
+
+// Derive response queue name from command queue if not explicitly set
+// Queue URL format: https://sqs.region.amazonaws.com/account-id/queue-name
+// We extract the queue name (instance ID) and append "-responses"
+function getResponseQueueName(): string {
+  if (RESPONSE_QUEUE_NAME) {
+    return RESPONSE_QUEUE_NAME;
+  }
+  
+  // Extract queue name from QUEUE_URL
+  // Format: https://sqs.region.amazonaws.com/account-id/instance-id
+  const match = QUEUE_URL.match(/\/[^\/]+$/);
+  if (match) {
+    const instanceId = match[0].substring(1); // Remove leading /
+    return `${instanceId}-responses`;
+  }
+  
+  return "";
+}
 
 // Allowlist of executable commands
 const ALLOWLIST = new Set<string>([
@@ -70,9 +90,59 @@ function parseMessage(body: string): CommandMessage | null {
 }
 
 /**
+ * Sends command result back to response queue
+ */
+async function sendResponse(correlationId: string, result: { success: boolean; output: string; error?: string; exitCode: number }): Promise<void> {
+  const responseQueueName = getResponseQueueName();
+  if (!responseQueueName) {
+    console.log("No response queue configured, skipping response");
+    return;
+  }
+
+  try {
+    // Get response queue URL
+    const queueUrlResponse = await sqsClient.send(
+      new GetQueueUrlCommand({
+        QueueName: responseQueueName,
+      })
+    );
+
+    if (!queueUrlResponse.QueueUrl) {
+      console.error(`Response queue not found: ${responseQueueName}`);
+      return;
+    }
+
+    const responseBody = JSON.stringify({
+      correlationId,
+      success: result.success,
+      stdout: result.output,
+      stderr: result.error || "",
+      exitCode: result.exitCode,
+    });
+
+    await sqsClient.send(
+      new SendMessageCommand({
+        QueueUrl: queueUrlResponse.QueueUrl,
+        MessageBody: responseBody,
+        MessageAttributes: {
+          CorrelationId: {
+            DataType: "String",
+            StringValue: correlationId,
+          },
+        },
+      })
+    );
+
+    console.log(`Response sent for correlation ID: ${correlationId}`);
+  } catch (error) {
+    console.error("Failed to send response:", error);
+  }
+}
+
+/**
  * Executes a command using Bun.spawn
  */
-async function executeCommand(cmd: CommandMessage): Promise<{ success: boolean; output: string; error?: string }> {
+async function executeCommand(cmd: CommandMessage): Promise<{ success: boolean; output: string; error?: string; exitCode: number }> {
   try {
     const proc = Bun.spawn([cmd.command, ...(cmd.args || [])], {
       cwd: cmd.cwd,
@@ -88,12 +158,14 @@ async function executeCommand(cmd: CommandMessage): Promise<{ success: boolean; 
       success: exitCode === 0,
       output: stdout,
       error: stderr || undefined,
+      exitCode,
     };
   } catch (error) {
     return {
       success: false,
       output: "",
       error: error instanceof Error ? error.message : String(error),
+      exitCode: 1,
     };
   }
 }
@@ -104,6 +176,7 @@ async function executeCommand(cmd: CommandMessage): Promise<{ success: boolean; 
 async function processMessage(message: any): Promise<void> {
   const body = message.Body || "";
   const receiptHandle = message.ReceiptHandle;
+  const correlationId = message.MessageAttributes?.CorrelationId?.StringValue || message.MessageId || "";
 
   console.log(`Received message: ${body}`);
 
@@ -116,6 +189,16 @@ async function processMessage(message: any): Promise<void> {
   // Validate command against allowlist
   if (!isCommandAllowed(cmd.command)) {
     console.error(`Command "${cmd.command}" is not in the allowlist`);
+    
+    // Send error response
+    if (correlationId) {
+      await sendResponse(correlationId, {
+        success: false,
+        output: "",
+        error: `Command "${cmd.command}" is not in the allowlist`,
+        exitCode: 1,
+      });
+    }
     
     // Delete the message even if rejected to prevent reprocessing
     if (receiptHandle) {
@@ -137,6 +220,11 @@ async function processMessage(message: any): Promise<void> {
 
   // Execute the command
   const result = await executeCommand(cmd);
+
+  // Send response back
+  if (correlationId) {
+    await sendResponse(correlationId, result);
+  }
 
   if (result.success) {
     console.log("Command executed successfully");
@@ -172,6 +260,7 @@ async function pollQueue(): Promise<void> {
       MaxNumberOfMessages: 1,
       WaitTimeSeconds: 20, // Long polling
       VisibilityTimeout: 30,
+      MessageAttributeNames: ["All"], // Receive message attributes
     });
 
     const response = await sqsClient.send(command);

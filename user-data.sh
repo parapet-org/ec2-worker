@@ -47,6 +47,7 @@ echo "Installing project dependencies..."
 # CONFIGURATION: Set your SQS Queue URL here (uncomment and set your value)
 # ============================================================================
 # SQS_QUEUE_URL="https://sqs.us-east-1.amazonaws.com/123456789012/your-queue-name"
+# RESPONSE_QUEUE_NAME="your-instance-id-responses"  # Response queue name (instanceId-responses)
 # AWS_REGION="us-east-1"  # Optional, defaults to us-east-1
 
 # Alternative: Read from EC2 instance tags (uncomment to use)
@@ -72,6 +73,9 @@ echo "Creating systemd service..."
     echo 'Environment="PATH=/root/.bun/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"'
     if [ -n "$SQS_QUEUE_URL" ]; then
         echo "Environment=\"SQS_QUEUE_URL=$SQS_QUEUE_URL\""
+    fi
+    if [ -n "$RESPONSE_QUEUE_NAME" ]; then
+        echo "Environment=\"RESPONSE_QUEUE_NAME=$RESPONSE_QUEUE_NAME\""
     fi
     if [ -n "$AWS_REGION" ]; then
         echo "Environment=\"AWS_REGION=$AWS_REGION\""
