@@ -60,6 +60,10 @@ function isCommandAllowed(command: string): boolean {
  * Parses a message from SQS into a command structure
  */
 function parseMessage(body: string): CommandMessage | null {
+  // Log the raw body for debugging
+  console.log(`[parseMessage] Raw body type: ${typeof body}, length: ${body.length}`);
+  console.log(`[parseMessage] Raw body content: ${JSON.stringify(body)}`);
+  
   try {
     const parsed = JSON.parse(body);
     
@@ -82,9 +86,19 @@ function parseMessage(body: string): CommandMessage | null {
       };
     }
     
+    console.error(`[parseMessage] Parsed value doesn't match expected format:`, parsed);
     return null;
   } catch (error) {
-    console.error("Failed to parse message:", error);
+    console.error(`[parseMessage] Failed to parse message. Body: ${JSON.stringify(body)}`, error);
+    // Try to handle plain text as a fallback (for backward compatibility with old messages)
+    if (typeof body === "string" && body.trim().length > 0) {
+      console.log(`[parseMessage] Attempting to parse as plain text command`);
+      const parts = body.trim().split(/\s+/);
+      return {
+        command: parts[0],
+        args: parts.slice(1),
+      };
+    }
     return null;
   }
 }
