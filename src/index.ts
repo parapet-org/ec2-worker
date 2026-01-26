@@ -36,6 +36,9 @@ const ALLOWLIST = new Set<string>([
   "whoami",
   "date",
   "uname",
+  "npm",
+  "npx",
+  "bun",
 ]);
 
 // Initialize SQS client
