@@ -54,8 +54,11 @@ interface CommandMessage {
  * Validates if a command is in the allowlist
  */
 function isCommandAllowed(command: string): boolean {
-  // Extract the base command (without path)
-  const baseCommand = command.split("/").pop() || command;
+  // Extract the base command (without path and without arguments)
+  // First split by "/" to handle paths, then by space to get the first word
+  const pathParts = command.split("/");
+  const lastPart = pathParts[pathParts.length - 1] || command;
+  const baseCommand = lastPart.trim().split(/\s+/)[0];
   
   // If the base command is in the allowlist, allow it with any subcommands
   if (ALLOWLIST.has(baseCommand)) {
@@ -180,7 +183,19 @@ async function sendResponse(correlationId: string, result: { success: boolean; o
  */
 async function executeCommand(cmd: CommandMessage): Promise<{ success: boolean; output: string; error?: string; exitCode: number }> {
   try {
-    const proc = Bun.spawn([cmd.command, ...(cmd.args || [])], {
+    // Split command if it contains spaces and args weren't explicitly provided
+    let command = cmd.command;
+    let args = cmd.args ?? [];
+
+    if (typeof command === "string") {
+      const parts = command.trim().split(/\s+/);
+      command = parts[0];
+      if (!cmd.args) {
+        args = parts.slice(1);
+      }
+    }
+
+    const proc = Bun.spawn([command, ...args], {
       cwd: cmd.cwd,
       stdout: "pipe",
       stderr: "pipe",
