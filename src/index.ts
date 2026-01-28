@@ -56,7 +56,13 @@ interface CommandMessage {
 function isCommandAllowed(command: string): boolean {
   // Extract the base command (without path)
   const baseCommand = command.split("/").pop() || command;
-  return ALLOWLIST.has(baseCommand);
+  
+  // If the base command is in the allowlist, allow it with any subcommands
+  if (ALLOWLIST.has(baseCommand)) {
+    return true;
+  }
+  
+  return false;
 }
 
 /**
@@ -96,6 +102,19 @@ function parseMessage(body: string): CommandMessage | null {
     // Try to handle plain text as a fallback (for backward compatibility with old messages)
     if (typeof body === "string" && body.trim().length > 0) {
       console.log(`[parseMessage] Attempting to parse as plain text command`);
+      
+      // Try to parse sqs_job format: sqs_job [instanceId=..., command=git clone ...]
+      const commandMatch = body.match(/command=([^\]]+)/);
+      if (commandMatch) {
+        const commandString = commandMatch[1].trim().replace(/\]$/, ''); // Remove trailing bracket if present
+        const parts = commandString.split(/\s+/);
+        return {
+          command: parts[0],
+          args: parts.slice(1),
+        };
+      }
+      
+      // Fallback to simple whitespace splitting
       const parts = body.trim().split(/\s+/);
       return {
         command: parts[0],
