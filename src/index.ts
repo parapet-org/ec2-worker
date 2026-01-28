@@ -27,6 +27,7 @@ function getResponseQueueName(): string {
 
 // Allowlist of executable commands
 const ALLOWLIST = new Set<string>([
+  "cwd",
   "ls",
   "grep",
   "git",
